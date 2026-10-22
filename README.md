@@ -193,3 +193,112 @@ source project.env
 2. **Git Integration:**
    * If a repository SSH is provided, it executes `git clone`.
 3. **Symbolic Links (Symlinks):** When alternative base paths are specified, a symlink is created inside the main project tree pointing to that target.
+
+---
+
+# `md5_manifest.sh` Script Documentation
+
+`md5_manifest.sh` is a portable Bash utility designed to generate and verify tab-separated MD5 checksum manifests for data integrity management. It recursively processes files and directories, recording the MD5 hash alongside the absolute path of every file.
+
+It integrates seamlessly with project environments established via `project.env` by automatically saving manifests into the `$PROJ_MANIFESTS` directory when loaded.
+
+---
+
+## 📋 Features
+
+1. **Cross-Platform Compatibility:** Works on both Linux (`md5sum`) and macOS (`md5`), utilizing stream redirection to handle filenames containing special characters or spaces safely.
+2. **Recursive Traversal:** Recursively processes directories to calculate checksums for all enclosed files.
+3. **Atomic File Operations:** Writes output to temporary files before sorting and saving, preventing partially written manifests in the event of an interruption.
+4. **Append & Overwrite Safety:** Prevents accidental overwrites of existing manifests by requiring explicit `--append` or `--overwrite` flags.
+5. **Self-Exclusion:** Automatically avoids calculating and writing a checksum for the target manifest file itself.
+6. **Integrity Checking Mode:** Reads generated manifests, recalculates current MD5 hashes, and flags missing or altered files.
+
+---
+
+## 📑 Manifest File Format
+
+Manifest files are generated in tab-separated value (`.tsv`) format:
+
+```text
+<md5_hash><TAB><absolute_file_path>
+```
+
+### Example Manifest Content:
+```tsv
+d41d8cd98f00b204e9800998ecf8427e	/home/user/projects/gutbac/data/long-term/sample1.fastq.gz
+7b8b965ad4bca0e41ab51de7b31363a1	/home/user/projects/gutbac/data/long-term/sample2.fastq.gz
+```
+
+---
+
+## ⚙️ Options and Parameters
+
+```text
+Usage:
+  md5_manifest.sh [options] PATH [PATH ...]     Register MD5 checksums
+  md5_manifest.sh -c MANIFEST                   Verify files against a manifest
+```
+
+| Short Option | Long Option | Description | Default |
+| :--- | :--- | :--- | :--- |
+| `-o` | `--output FILE` | Output manifest file path. Bare filenames (without `/`) default to `$PROJ_MANIFESTS`. | `$PROJ_MANIFESTS/md5_<date>_<time>.tsv` |
+| `-l` | `--list FILE` | Path to a text file containing one input path per line. | *None* |
+| `-a` | `--append` | Append new files to an existing manifest, skipping paths already recorded. | Disabled (Requires choice if file exists) |
+|      | `--overwrite` | Overwrite an existing manifest file completely. | Disabled (Requires choice if file exists) |
+| `-c` | `--check FILE` | Verification mode: Recompute hashes and compare against the specified manifest. | *None* |
+| `-h` | `--help` | Display help text and exit. | — |
+
+---
+
+## 🚀 Usage Examples
+
+### 1. Generating a Manifest for a Directory
+Generate a checksum manifest for all files under the raw data directory:
+
+```bash
+# Ensure project variables are active
+source project.env
+
+# Generate manifest in $PROJ_MANIFESTS/raw_data.tsv
+md5_manifest.sh -o raw_data.tsv ~/projects/gutbac/data/long-term
+```
+
+### 2. Appending New Files to an Existing Manifest
+Add new files or folders to a previously created manifest without recalculating existing entries:
+
+```bash
+md5_manifest.sh -a -o raw_data.tsv new_sample.fastq.gz additional_dir/
+```
+
+### 3. Using an Input List File
+Provide input targets via a text file listing paths line by line:
+
+```bash
+md5_manifest.sh -l paths_list.txt -o batch_manifest.tsv
+```
+
+### 4. Verifying Data Integrity (`--check`)
+Validate that files have not been corrupted, altered, or deleted:
+
+```bash
+md5_manifest.sh -c $PROJ_MANIFESTS/raw_data.tsv
+```
+
+**Example Output (Verification Passed):**
+```text
+[info] Check done: 42 OK, 0 changed, 0 missing.
+```
+
+**Example Output (Integrity Failures):**
+```text
+FAILED:  /home/user/projects/gutbac/data/long-term/sample1.fastq.gz
+MISSING: /home/user/projects/gutbac/data/long-term/sample3.fastq.gz
+[info] Check done: 40 OK, 1 changed, 1 missing.
+```
+
+---
+
+## 🚦 Exit Statuses
+
+* `0`: Operation completed successfully / Verification passed with 0 errors.
+* `1`: Script failed due to missing inputs, read errors, invalid arguments, or verification failures (missing or modified files).
