@@ -10,9 +10,13 @@
 #   └── project.env
 #
 # Any of the 5 "linkable" directories can live somewhere else (e.g. a backed-up
-# disk). In that case the real files go to <alt>/<proj>/<name> and a symlink is
-# created inside the project. If no alternative path is given, a normal
-# directory is created inside the project.
+# disk). In that case a symlink inside the project points exactly to the path
+# you gave (that path is the folder itself). If no alternative path is given,
+# a normal directory is created inside the project.
+#
+# scripts/code and scripts/submit_scripts/validated each take either a GitHub
+# SSH address (cloned) or a folder path (linked). Your SSH key must be set up
+# BEFORE running this script: see SSH_SETUP.md.
 
 set -euo pipefail
 
@@ -25,20 +29,22 @@ If you run it without options in a terminal, it asks everything interactively.
 Options:
   -n, --name NAME          Project name
   -p, --path DIR           Where the project folder will be created (default: $HOME)
-      --short-term DIR     Base path for data/short-term   (fast access disk)
-      --manifests DIR      Base path for data/manifests    (home)
-      --long-term DIR      Base path for data/long-term    (backed-up disk)
-      --working DIR        Base path for results/working
-      --validated DIR      Base path for results/validated
-      --code-repo URL      Git repo to clone into scripts/code
-      --submit-repo URL    Git repo to clone into scripts/submit_scripts/validated
+      --short-term DIR     Folder that data/short-term will link to (fast access disk)
+      --manifests DIR      Folder that data/manifests will link to  (home)
+      --long-term DIR      Folder that data/long-term will link to  (backed-up disk)
+      --working DIR        Folder that results/working will link to
+      --validated DIR      Folder that results/validated will link to
+      --code REPO|DIR      scripts/code: GitHub SSH address (git@github.com:user/repo.git)
+                           to clone, OR a folder to link to
+      --submit REPO|DIR    scripts/submit_scripts/validated: same as --code
+                           (without --code/--submit, plain folders are created)
   -y, --yes                Non-interactive: never ask, use defaults for missing values
   -h, --help               Show this help
 
 Example:
   setup_project.sh -n gutbac -p ~/projects \
       --short-term /scratch/$USER --long-term /backup/$USER \
-      --code-repo git@github.com:me/gutbac-code.git
+      --code git@github.com:me/gutbac-code.git
 EOF
 }
 
@@ -56,6 +62,15 @@ expand_path() {  # expands ~ and makes the path absolute (does not need to exist
   case "$p" in
     /*) printf '%s\n' "${p%/}" ;;
     *)  printf '%s\n' "$PWD/${p%/}" ;;
+  esac
+}
+
+is_repo() { case "$1" in git@*|ssh://*) return 0 ;; *) return 1 ;; esac; }
+
+check_repo_arg() {  # $1 = option name, $2 = value
+  case "$2" in
+    http://*|https://*)
+      die "$1: use the SSH address from GitHub (git@github.com:user/repo.git), not the https URL." ;;
   esac
 }
 
@@ -80,8 +95,8 @@ while [[ $# -gt 0 ]]; do
     --long-term)      ALT_LONG="$2"; shift 2 ;;
     --working)        ALT_WORKING="$2"; shift 2 ;;
     --validated)      ALT_VALIDATED="$2"; shift 2 ;;
-    --code-repo)      CODE_REPO="$2"; shift 2 ;;
-    --submit-repo)    SUBMIT_REPO="$2"; shift 2 ;;
+    --code|--code-repo)       CODE_REPO="$2"; shift 2 ;;
+    --submit|--submit-repo)   SUBMIT_REPO="$2"; shift 2 ;;
     -y|--yes)         YES=1; shift ;;
     -h|--help)        usage; exit 0 ;;
     *) die "Unknown option: $1 (use --help)" ;;
@@ -100,7 +115,7 @@ if [[ $INTERACTIVE -eq 1 ]]; then
   [[ -z "$PROJ" ]] && PROJ=$(ask "Project name")
   [[ -z "$BASE" ]] && BASE=$(ask "Where should the project live" "$HOME")
   echo
-  echo "For each directory below, give an alternative base path to create a link"
+  echo "For each directory below, give the folder it should link to"
   echo "(e.g. a backed-up disk). Leave empty to keep it inside the project."
   [[ -z "$ALT_SHORT" ]]     && ALT_SHORT=$(ask "data/short-term  -> fast access path")
   [[ -z "$ALT_MANIFESTS" ]] && ALT_MANIFESTS=$(ask "data/manifests   -> home path")
@@ -108,8 +123,8 @@ if [[ $INTERACTIVE -eq 1 ]]; then
   [[ -z "$ALT_WORKING" ]]   && ALT_WORKING=$(ask "results/working  -> alternative path")
   [[ -z "$ALT_VALIDATED" ]] && ALT_VALIDATED=$(ask "results/validated-> alternative path")
   echo
-  [[ -z "$CODE_REPO" ]]   && CODE_REPO=$(ask "Git repo URL to clone into scripts/code (empty = git init)")
-  [[ -z "$SUBMIT_REPO" ]] && SUBMIT_REPO=$(ask "Git repo URL for submit_scripts/validated (empty = git init)")
+  [[ -z "$CODE_REPO" ]]   && CODE_REPO=$(ask "scripts/code: GitHub SSH address (git@github.com:user/repo.git) or folder path (empty = plain folder)")
+  [[ -z "$SUBMIT_REPO" ]] && SUBMIT_REPO=$(ask "submit_scripts/validated: GitHub SSH address or folder path (empty = plain folder)")
 fi
 
 [[ -z "$PROJ" ]] && die "Project name is required (-n NAME)."
@@ -117,11 +132,39 @@ fi
 BASE=$(expand_path "${BASE:-$HOME}")
 ROOT="$BASE/$PROJ"
 
+check_repo_arg "--code" "$CODE_REPO"
+check_repo_arg "--submit" "$SUBMIT_REPO"
+
+CAN_PROMPT=0
+if [[ $YES -eq 0 && -t 0 ]]; then CAN_PROMPT=1; fi
+
+# Two directories must not link to the same folder (their files would mix).
+check_duplicate_links() {
+  local seen="" a e
+  local c="$CODE_REPO" sb="$SUBMIT_REPO"
+  is_repo "$c"  && c=""
+  is_repo "$sb" && sb=""
+  for a in "$ALT_SHORT" "$ALT_MANIFESTS" "$ALT_LONG" "$ALT_WORKING" "$ALT_VALIDATED" "$c" "$sb"; do
+    [[ -z "$a" ]] && continue
+    e=$(expand_path "$a")
+    case "
+$seen
+" in
+      *"
+$e
+"*) die "The same folder was given for two directories: $e" ;;
+    esac
+    seen="$seen
+$e"
+  done
+}
+check_duplicate_links
+
 # ---------- core functions ----------
-# make_dir <relative path inside project> <alt base or ""> <target folder name>
-# Creates a real dir, or a symlink to <alt>/<proj>/<target name>.
+# make_dir <relative path inside project> <alt path or "">
+# Creates a real dir, or a symlink pointing exactly to <alt path>.
 make_dir() {
-  local rel="$1" alt="$2" tname="$3"
+  local rel="$1" alt="$2"
   local here="$ROOT/$rel"
   mkdir -p "$(dirname "$here")"
 
@@ -131,8 +174,9 @@ make_dir() {
     return
   fi
 
-  alt=$(expand_path "$alt")
-  local target="$alt/$PROJ/$tname"
+  # The path given by the user IS the link target (no <proj>/<name> appended).
+  local target
+  target=$(expand_path "$alt")
   mkdir -p "$target"
 
   if [[ -L "$here" ]]; then
@@ -145,10 +189,15 @@ make_dir() {
   fi
 }
 
-# git_dir <relative path> <repo url or "">
-# Clones the repo, or runs git init if no URL was given.
-git_dir() {
-  local rel="$1" url="$2" here="$ROOT/$1"
+# ---------- scripts/code and scripts/submit_scripts/validated ----------
+# The argument can be:
+#   - a GitHub SSH address (git@github.com:user/repo.git)  -> git clone
+#   - a folder path                                        -> symlink to it
+#   - empty                                                -> plain folder inside the project
+# Your SSH key must already be set up (see SSH_SETUP.md).
+
+clone_repo() {  # clone_repo <relative path> <ssh url>
+  local rel="$1" url="$2" here="$ROOT/$1" ok=0
   mkdir -p "$(dirname "$here")"
 
   if [[ -d "$here/.git" ]]; then
@@ -156,27 +205,33 @@ git_dir() {
     return
   fi
   if [[ -d "$here" && -n "$(ls -A "$here" 2>/dev/null)" ]]; then
-    warn "$rel is not empty; skipping git setup."
+    warn "$rel is not empty; skipping clone."
     return
   fi
-
   if ! command -v git >/dev/null 2>&1; then
     warn "git not found; creating plain directory for $rel."
     mkdir -p "$here"; return
   fi
 
-  if [[ -n "$url" ]]; then
-    if git clone "$url" "$here"; then
-      log "$rel  (cloned $url)"
-    else
-      warn "Clone failed for $url; creating empty git repo instead."
-      mkdir -p "$here"; git -C "$here" init -q
-    fi
-  else
-    mkdir -p "$here"
-    git -C "$here" init -q
-    log "$rel  (git init)"
+  if [[ $CAN_PROMPT -eq 1 ]]; then
+    git clone "$url" "$here" && ok=1
+  else  # never wait for a password/prompt when running unattended
+    GIT_SSH_COMMAND="ssh -o BatchMode=yes" git clone "$url" "$here" && ok=1
   fi
+
+  if [[ $ok -eq 1 ]]; then
+    log "$rel  (cloned $url)"
+  else
+    warn "Clone failed for $url (is your SSH key set up? see SSH_SETUP.md)."
+    warn "Creating an empty repo with 'origin' set, so you can 'git pull' later."
+    rm -rf "$here"; mkdir -p "$here"
+    git -C "$here" init -q
+    git -C "$here" remote add origin "$url"
+  fi
+}
+
+setup_scripts_dir() {  # setup_scripts_dir <relative path> <repo, path or "">
+  if is_repo "$2"; then clone_repo "$1" "$2"; else make_dir "$1" "$2"; fi
 }
 
 # ---------- build ----------
@@ -186,17 +241,17 @@ fi
 mkdir -p "$ROOT"
 log "Creating project at $ROOT"
 
-make_dir "data/short-term"      "$ALT_SHORT"     "data_short-term"
-make_dir "data/manifests"       "$ALT_MANIFESTS" "manifests"
-make_dir "data/long-term"       "$ALT_LONG"      "data_long-term"
-make_dir "results/working"      "$ALT_WORKING"   "results_working"
-make_dir "results/validated"    "$ALT_VALIDATED" "results_validated"
+make_dir "data/short-term"      "$ALT_SHORT"
+make_dir "data/manifests"       "$ALT_MANIFESTS"
+make_dir "data/long-term"       "$ALT_LONG"
+make_dir "results/working"      "$ALT_WORKING"
+make_dir "results/validated"    "$ALT_VALIDATED"
 
 mkdir -p "$ROOT/scripts/submit_scripts/under_work"
 log "scripts/submit_scripts/under_work  (local directory)"
 
-git_dir "scripts/code"                      "$CODE_REPO"
-git_dir "scripts/submit_scripts/validated"  "$SUBMIT_REPO"
+setup_scripts_dir "scripts/code"                      "$CODE_REPO"
+setup_scripts_dir "scripts/submit_scripts/validated"  "$SUBMIT_REPO"
 
 # ---------- project.env ----------
 ENV_FILE="$ROOT/project.env"
