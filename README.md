@@ -302,3 +302,93 @@ MISSING: /home/user/projects/gutbac/data/long-term/sample3.fastq.gz
 
 * `0`: Operation completed successfully / Verification passed with 0 errors.
 * `1`: Script failed due to missing inputs, read errors, invalid arguments, or verification failures (missing or modified files).
+
+---
+# File Transfer & MD5 Verification Script (`transferfile.sh`)
+
+A Bash script to safely copy or move files to a target directory by verifying their MD5 checksums against a manifest prior to completion (or prior to deleting the source file in a move operation).
+
+---
+
+## 📌 Overview
+
+`transferfile.sh` automates file transfers with built-in integrity checking:
+
+* **Action Validation:** Accepts either `copy` or `move`.
+* **Flexible Path Matching:** Looks up expected MD5 hashes by exact full path, relative path, or filename.
+* **Safe Operations:** When executing a `move`, the source file is only removed if the MD5 check succeeds at the destination.
+* **Auto-Directory Creation:** Automatically creates target directories using `mkdir -p` if they do not exist.
+
+---
+
+## 🛠 Usage
+
+```bash
+./transfer.sh <copy|move> <file> <destination> <md5_file>
+
+```
+
+### Parameters
+
+| Argument | Options / Format | Description |
+| --- | --- | --- |
+| **`action`** | `copy` | `move` | Operation to perform. `move` only removes the original file upon successful MD5 verification. |
+| **`file`** | File path | Path to the source file to be copied or moved. |
+| **`destination`** | Directory path | Path to the target directory. Created if it doesn't exist. |
+| **`md5_file`** | TSV file | A tab-separated file mapping hashes to file paths. |
+
+---
+
+## 📄 Hash List Format (`md5_file`)
+
+The MD5 file **must** be formatted as tab-separated values (TSV) with the hash in the first column and the relative or full path in the second column:
+
+```tsv
+<hash><TAB><path>
+
+```
+
+### Example Manifest (`list.md5`):
+
+```tsv
+e99a18c428cb38d5f260853678922e03	photo.jpg
+d41d8cd98f00b204e9800998ecf8427e	documents/data.txt
+
+```
+
+---
+
+## 🚀 Examples
+
+### 1. Copying a File
+
+Copy `photo.jpg` to `/mnt/backup/photos` and verify against `list.md5`:
+
+```bash
+./transfer.sh copy photo.jpg /mnt/backup/photos list.md5
+
+```
+
+### 2. Moving a File safely
+
+Move `data.txt` to `/mnt/storage` and delete local `data.txt` only after validation:
+
+```bash
+./transfer.sh move data.txt /mnt/storage list.md5
+
+```
+
+---
+
+## 🔒 Safety & Error Handling
+
+* Returns exit code `1` immediately if:
+* Required arguments are missing.
+* An invalid action (anything other than `copy` or `move`) is supplied.
+* Source file or MD5 manifest does not exist.
+* File entry is missing from the MD5 manifest.
+* Destination directory creation or copying fails.
+* Computed MD5 checksum at destination does not match the expected MD5 value.
+
+
+* In `move` mode, if MD5 verification fails, the source file is **preserved** to prevent data loss.
